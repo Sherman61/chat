@@ -1,0 +1,335 @@
+<?php
+session_start();
+
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
+
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.php");
+    exit;
+}
+
+// Database configuration
+require_once 'connection.php';
+
+// Fetch user information
+$user_id = $_SESSION['user_id'];
+$stmt = $mysqli->prepare("SELECT * FROM users WHERE id = ?");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$userResult = $stmt->get_result();
+$user = $userResult->fetch_assoc();
+
+// Retrieve the username from the URL parameter
+if (isset($_GET['username'])) {
+    $username = $_GET['username'];
+
+   // Fetch user information of the user you are chatting with
+$stmt = $mysqli->prepare("SELECT * FROM users WHERE username = ?");
+$stmt->bind_param("s", $username);
+$stmt->execute();
+$chatUserResult = $stmt->get_result();
+$chatUser = $chatUserResult->fetch_assoc();
+
+// Verify if the $chatUser array is empty
+if (empty($chatUser)) {
+    // Handle the case when the username does not exist
+    echo "User not found";
+    header("Location: new_message.php");
+    exit;
+}
+
+    // Fetch chat history between the two users
+    $stmt = $mysqli->prepare("SELECT * FROM chats WHERE (from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?) ORDER BY time_sent ASC");
+    $stmt->bind_param("iiii", $user_id, $chatUser['id'], $chatUser['id'], $user_id);
+    $stmt->execute();
+    $chatsResult = $stmt->get_result();
+} else {
+    header("Location: new_message.php");
+    exit;
+}
+
+// Check if the form is submitted to add a new message
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $message = $_POST['message'];
+    $time_sent = date('Y-m-d H:i:s');
+
+    // Insert the new message into the chats table
+    $stmt = $mysqli->prepare("INSERT INTO chats (message, time_sent, from_user, to_user) VALUES (?, ?, ?, ?)");
+    $stmt->bind_param("ssii", $message, $time_sent, $user_id, $chatUser['id']);
+    $stmt->execute();
+
+    // Redirect to the same page using GET after processing the form submission
+    header("Location: chat.php?username=" . urlencode($username));
+    exit;
+}
+
+// Close the database connection
+$mysqli->close();
+
+// Function to format the time in a readable format
+function formatTime($time)
+{
+    $currentTime = time();
+    $messageTime = strtotime($time);
+    $elapsedTime = $currentTime - $messageTime;
+
+    if ($elapsedTime < 60) {
+        return 'Just now';
+    } elseif ($elapsedTime < 3600) {
+        $minutes = floor($elapsedTime / 60);
+        return $minutes . ' minute(s) ago';
+    } elseif ($elapsedTime < 86400) {
+        $hours = floor($elapsedTime / 3600);
+        return $hours . ' hour(s) ago';
+    } else {
+        return date('M j, Y H:i', $messageTime);
+    }
+}
+?>
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chat</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+        .chat-container {
+            width: 80%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background-color: lightblue;
+            margin-top: 20px;
+            padding: 20px;
+        }
+        .chat-header {
+            margin-bottom: 20px;
+        }
+        .chat-history {
+            flex-grow: 1;
+            overflow-y: scroll;
+            padding: 10px;
+        }
+        .message-container {
+            margin-bottom: 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            position: relative;
+        }
+        .message-container.sent {
+            align-items: flex-end;
+        }
+        .message-container.sent .message {
+            background-color: #C3E8C8;
+            color: #000;
+        }
+        .message-container.received .message {
+            background-color: #E8F1FA;
+            color: #000;
+        }
+        .message-container span {
+            font-weight: bold;
+            font-size: 12px;
+            color: #888;
+        }
+        .message {
+            padding: 10px;
+            border-radius: 5px;
+            max-width: 70%;
+            word-wrap: break-word;
+        }
+        .message-actions {
+            position: absolute;
+            top: 0;
+            right: 0;
+            display: none;
+        }
+        .message-container:hover .message-actions {
+            display: block;
+        }
+        .message-actions button {
+            background-color: #FF0000;
+            color: #FFF;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .message-form {
+            display: flex;
+        }
+        .message-form input[type="text"] {
+            flex-grow: 1;
+            padding: 5px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            margin-right: 10px;
+        }
+        .message-form input[type="submit"] {
+            padding: 5px 10px;
+            background-color: #4CAF50;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+        
+            <h2>Chatting with: <?php echo $chatUser['first_name']; ?> <?php echo $chatUser['last_name']; ?></h2>
+        </div>
+
+        <div class="chat-history">
+        <!-- Existing messages -->
+        <?php while ($chat = $chatsResult->fetch_assoc()) : ?>
+            <div class="message-container <?php echo ($chat['from_user'] == $user_id) ? 'sent' : 'received'; ?>" data-message-id="<?php echo $chat['id']; ?>">
+                <span class="message-time"><?php echo formatTime($chat['time_sent']); ?></span>
+                <p class="message"><?php echo $chat['message']; ?></p>
+                <div class="message-actions">
+                    <button class="delete-button" onclick="deleteMessage(<?php echo $chat['id']; ?>)">Delete</button>
+                </div>
+            </div>
+        <?php endwhile; ?>
+    </div>
+
+        <div class="message-form">
+            <form id="messageForm" method="POST" action="">
+                <input type="text" name="message" placeholder="Type your message" required>
+                <input type="submit" value="Send">
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // Get all message containers
+        const messageContainers = document.querySelectorAll('.message-container');
+
+        // Track the timestamp when the touch starts
+        let touchStartTime = 0;
+
+        // Add event listeners to message containers
+        messageContainers.forEach(container => {
+            // Add event listener for left-click (on desktop)
+            container.addEventListener('click', function(event) {
+                // Check if left-clicked on the message container (not the delete button)
+                if (!event.target.classList.contains('delete-button')) {
+                    // Toggle delete button visibility
+                    toggleDeleteButton(container);
+                }
+            });
+
+            // Add event listener for touch start (on mobile)
+            container.addEventListener('touchstart', function() {
+                touchStartTime = new Date().getTime();
+            });
+
+            // Add event listener for touch end (on mobile)
+            container.addEventListener('touchend', function(event) {
+                const touchEndTime = new Date().getTime();
+                const touchDuration = touchEndTime - touchStartTime;
+
+                // Check if touch duration is within the threshold for a long press (500ms)
+                if (touchDuration < 500) {
+                    // Toggle delete button visibility
+                    toggleDeleteButton(container);
+                }
+            });
+        });
+
+        // Toggle delete button visibility for a message container
+        function toggleDeleteButton(container) {
+            const deleteButton = container.querySelector('.delete-button');
+            const isHidden = deleteButton.style.display === 'none' || deleteButton.style.display === '';
+
+            // Toggle the display property based on the current visibility state
+            deleteButton.style.display = isHidden ? 'block' : 'none';
+        }
+
+        // Delete a message
+        function deleteMessage(messageId) {
+            // Send an AJAX request to delete the message
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', 'delete_message.php', true);
+            xhr.setRequestHeader('Content-type', 'application/x-www-form-urlencoded');
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === 4 && xhr.status === 200) {
+                    // Reload the page to update the message history
+                    location.reload();
+                }
+            };
+            xhr.send('id=' + messageId);
+        }
+    </script>
+     <script>
+        // Function to fetch new messages using AJAX
+        function fetchNewMessages() {
+            const lastMessageId = getLastMessageId(); // Implement this function to get the last message ID displayed in the chat history
+            
+            // Send an AJAX request to fetch new messages
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', `fetch_messages.php?username=<?php echo $chatUser['username']; ?>&lastMessageId=${lastMessageId}`, true);
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === 4 && xhr.status === 200) {
+                    const newMessages = JSON.parse(xhr.responseText);
+                    if (newMessages.length > 0) {
+                        // Process and append the new messages to the chat history
+                        newMessages.forEach(function(message) {
+                            appendMessageToHistory(message);
+                        });
+                    }
+                }
+            };
+            xhr.send();
+        }
+
+        // Function to append a new message to the chat history
+        function appendMessageToHistory(message) {
+            const chatHistory = document.querySelector('.chat-history');
+
+            // Create HTML elements for the new message
+            const messageContainer = document.createElement('div');
+            messageContainer.classList.add('message-container');
+            messageContainer.classList.add((message.from_user === <?php echo $user_id; ?>) ? 'sent' : 'received');
+
+            const messageTime = document.createElement('span');
+            messageTime.textContent = message.time_sent;
+            messageTime.classList.add('message-time');
+
+            const messageText = document.createElement('p');
+            messageText.textContent = message.message;
+            messageText.classList.add('message');
+
+            // Append the elements to the chat history
+            messageContainer.appendChild(messageTime);
+            messageContainer.appendChild(messageText);
+            chatHistory.appendChild(messageContainer);
+        }
+
+        // Function to get the ID of the last message displayed in the chat history
+        function getLastMessageId() {
+            const messageContainers = document.querySelectorAll('.message-container');
+            const lastMessageContainer = messageContainers[messageContainers.length - 1];
+            return lastMessageContainer ? lastMessageContainer.getAttribute('data-message-id') : 0;
+        }
+ 
+        // Periodically fetch new messages every 1.5 seconds (adjust as needed)
+        setInterval(fetchNewMessages, 1500);
+    </script>
+</body>
+</html>
